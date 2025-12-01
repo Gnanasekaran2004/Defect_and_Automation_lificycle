@@ -2,36 +2,41 @@ import sqlite3
 import requests
 import json
 from requests.auth import HTTPBasicAuth
-import time
 import os
+import sys
 
-INVENTORY_API_URL = "https://fakestoreapi.com/products"
+INVENTORY_API_URL = "https://dummyjson.com/products"
 DB_FILE = "supply_chain_inventory.db"
 
-JIRA_URL   = os.environ.get("JIRA_URL")
-JIRA_EMAIL = os.environ.get("JIRA_EMAIL")
+
+JIRA_URL    = os.environ.get("JIRA_URL") 
+JIRA_EMAIL  = os.environ.get("JIRA_EMAIL")
 PROJECT_KEY = os.environ.get("PROJECT_KEY")
 JIRA_TOKEN  = os.environ.get("JIRA_TOKEN")
 
-if not JIRA_TOKEN:
-    raise ValueError("Error: JIRA_TOKEN is missing! Set it in GitHub Secrets.")
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
+
+
 def setup_stale_database():
     print("\n[1/3] Building Local Database...")
-    response = requests.get(INVENTORY_API_URL,headers=HEADERS)
-    if response.status_code != 200:
-        print(f" API Error! Status: {response.status_code}")
-        print(f"Response Body: {response.text[:200]}")
-        return
     
-    products = response.json()
+    try:
+        response = requests.get(INVENTORY_API_URL, headers=HEADERS)
+        response.raise_for_status() 
+
+        data = response.json()
+        products = data['products'] 
+        
+    except Exception as e:
+        print(f"CRITICAL API ERROR: {e}")
+        print("Stopping execution to prevent database corruption.")
+        sys.exit(1)
     
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
- 
+
     cursor.execute("DROP TABLE IF EXISTS products")
     cursor.execute('''
         CREATE TABLE products (
@@ -44,10 +49,9 @@ def setup_stale_database():
     for item in products:
         pid = item['id']
         price = item['price']
-        
 
         if pid == 1:
-            price = 9.99 
+            price = 999.99 
             
         cursor.execute("INSERT INTO products VALUES (?, ?, ?)", (pid, item['title'], price))
     
@@ -55,9 +59,13 @@ def setup_stale_database():
     conn.close()
     print("Database created with 1 intentional defect.")
 
-
 def run_integrity_scan():
     print("\n[2/3] Scanning for Data Mismatches...")
+    
+    if not os.path.exists(DB_FILE):
+        print("Error: Database file not found. Setup failed.")
+        return []
+
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
@@ -65,11 +73,13 @@ def run_integrity_scan():
     cursor.execute("SELECT id, price FROM products")
     local_data = cursor.fetchall()
     
-    for row in local_data:
+ 
+    print(f"      Checking first 5 of {len(local_data)} records...")
+    
+    for row in local_data[:5]: 
         local_id = row[0]
         local_price = row[1]
         
-       
         try:
             api_resp = requests.get(f"{INVENTORY_API_URL}/{local_id}", headers=HEADERS)
             if api_resp.status_code == 200:
@@ -94,7 +104,11 @@ def log_defects_to_jira(defects_list):
     print(f"\n[3/3] Auto-Logging {len(defects_list)} Tickets to Jira...")
     
     if not defects_list:
-        print(" No defects found. System healthy.")
+        print("No defects found. System healthy.")
+        return
+        
+    if not JIRA_TOKEN:
+        print("Skipping Jira Log: No Token Found (Running locally?)")
         return
 
     url = f"{JIRA_URL}/rest/api/3/issue"
@@ -117,7 +131,7 @@ def log_defects_to_jira(defects_list):
                         }]
                     }]
                 },
-                "issuetype": {"name": "Task"},
+                "issuetype": {"name": "Task"}, 
                 "priority": {"name": "High"}
             }
         })
@@ -127,10 +141,9 @@ def log_defects_to_jira(defects_list):
         if response.status_code == 201:
             key = response.json()['key']
             print(f"Jira Ticket Created: {key}")
-            print(f"Link: {JIRA_URL}/browse/{key}")
         else:
             print(f"Failed to create ticket. Code: {response.status_code}")
-
+            print(f"Response: {response.text}")
 
 if __name__ == "__main__":
     print("="*50)
@@ -138,14 +151,9 @@ if __name__ == "__main__":
     print("="*50)
     
     setup_stale_database()
-    
-
     found_defects = run_integrity_scan()
-    
-
     log_defects_to_jira(found_defects)
     
     print("\n" + "="*50)
     print("PROCESS COMPLETE")
-
     print("="*50)
