@@ -15,10 +15,17 @@ JIRA_TOKEN  = os.environ.get("JIRA_TOKEN")
 
 if not JIRA_TOKEN:
     raise ValueError("Error: JIRA_TOKEN is missing! Set it in GitHub Secrets.")
-
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
 def setup_stale_database():
     print("\n[1/3] Building Local Database...")
-    response = requests.get(INVENTORY_API_URL)
+    response = requests.get(INVENTORY_API_URL,headers=HEADERS)
+    if response.status_code != 200:
+        print(f" API Error! Status: {response.status_code}")
+        print(f"Response Body: {response.text[:200]}")
+        return
+    
     products = response.json()
     
     conn = sqlite3.connect(DB_FILE)
@@ -64,7 +71,7 @@ def run_integrity_scan():
         
        
         try:
-            api_resp = requests.get(f"{INVENTORY_API_URL}/{local_id}")
+            api_resp = requests.get(f"{INVENTORY_API_URL}/{local_id}", headers=HEADERS)
             if api_resp.status_code == 200:
                 live_price = api_resp.json()['price']
                 
@@ -140,4 +147,5 @@ if __name__ == "__main__":
     
     print("\n" + "="*50)
     print("PROCESS COMPLETE")
+
     print("="*50)
